@@ -13,6 +13,8 @@ import 'package:xterm/flutter.dart';
 import 'package:xterm/theme/terminal_style.dart';
 import 'package:xterm/xterm.dart';
 
+import 'LocalTerminalBackend.dart';
+
 void main() {
   runApp(MyApp());
 
@@ -47,9 +49,11 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final tabs = TabsController();
-  final group = TabGroupController();
+  late final TabGroupController group;
   var tabCount = 0;
-
+  _MyHomePageState(){
+    group=TabGroupController();
+  }
   @override
   void initState() {
     addTab();
@@ -102,117 +106,122 @@ class _MyHomePageState extends State<MyHomePage> {
 
     final shell = getShell();
 
-    final pty = PseudoTerminal.start(
+    // final pty = PseudoTerminal.start(
+    //   shell,
+    //   ['-l'],
+    //   environment: {'TERM': 'xterm-256color'},
+    // );
+    var backend=LocalTerminalBackend(PseudoTerminal.start(
       shell,
       ['-l'],
       environment: {'TERM': 'xterm-256color'},
-    );
-
-    final terminal = Terminal(
-      onTitleChange: tab.setTitle,
-      onInput: pty.write,
-      platform: getPlatform(),
-    );
-
-    pty.out.listen(terminal.write);
-
+    ));
     final focusNode = FocusNode();
 
-    SchedulerBinding.instance!.addPostFrameCallback((timeStamp) {
-      focusNode.requestFocus();
-    });
+    final terminal = Terminal(
+      backend: backend,
+      onTitleChange: tab.setTitle,
+      platform: getPlatform(), maxLines: 9999,
+    );
+    tab.setContent(GestureDetector(
+      onSecondaryTapDown: (details) async {
+        final clipboardData = await Clipboard.getData('text/plain');
+        final hasSelection = terminal.selection?.isEmpty==false;
+        final clipboardHasData = clipboardData?.text?.isNotEmpty == true;
 
-    pty.exitCode.then((_) {
-      tab.requestClose();
-    });
-
-    return Tab(
-      controller: tab,
-      title: 'Terminal',
-      content: GestureDetector(
-        onSecondaryTapDown: (details) async {
-          final clipboardData = await Clipboard.getData('text/plain');
-          final hasSelection = !terminal.selection.isEmpty;
-          final clipboardHasData = clipboardData?.text?.isNotEmpty == true;
-
-          showMacosContextMenu(
-            context: context,
-            globalPosition: details.globalPosition,
-            children: [
-              MacosContextMenuItem(
-                content: Text('Copy'),
-                trailing: Text('⌘ C'),
-                enabled: hasSelection,
-                onTap: () {
-                  final text = terminal.getSelectedText();
-                  Clipboard.setData(ClipboardData(text: text));
-                  terminal.selection.clear();
-                  terminal.debug.onMsg('copy ┤$text├');
-                  terminal.refresh();
-                  Navigator.of(context).pop();
-                },
-              ),
-              MacosContextMenuItem(
-                content: Text('Paste'),
-                trailing: Text('⌘ V'),
-                enabled: clipboardHasData,
-                onTap: () {
-                  terminal.paste(clipboardData!.text!);
-                  terminal.debug.onMsg('paste ┤${clipboardData.text}├');
-                  Navigator.of(context).pop();
-                },
-              ),
-              MacosContextMenuItem(
-                content: Text('Select All'),
-                trailing: Text('⌘ A'),
-                onTap: () {
-                  print('Select All is currently not implemented.');
-                  Navigator.of(context).pop();
-                },
-              ),
-              MacosContextMenuDivider(),
-              MacosContextMenuItem(
-                content: Text('Clear'),
-                trailing: Text('⌘ K'),
-                onTap: () {
-                  print('Clear is currently not implemented.');
-                  Navigator.of(context).pop();
-                },
-              ),
-              MacosContextMenuDivider(),
-              MacosContextMenuItem(
-                content: Text('Kill'),
-                onTap: () {
-                  pty.kill();
-                  Navigator.of(context).pop();
-                },
-              ),
-            ],
-          );
-        },
-        child: CupertinoScrollbar(
-          child: TerminalView(
-            terminal: terminal,
-            onResize: pty.resize,
-            focusNode: focusNode,
-            opacity: 0.85,
-            style: TerminalStyle(
-              fontSize: 15,
+        showMacosContextMenu(
+          context: context,
+          globalPosition: details.globalPosition,
+          children: [
+            MacosContextMenuItem(
+              content: Text('Copy'),
+              trailing: Text('⌘ C'),
+              enabled: hasSelection,
+              onTap: () {
+                final text = terminal.getSelectedText();
+                Clipboard.setData(ClipboardData(text: text));
+                terminal.selection?.clear();
+                terminal.debug.onMsg('copy ┤$text├');
+                terminal.refresh();
+                Navigator.of(context).pop();
+              },
             ),
+            MacosContextMenuItem(
+              content: Text('Paste'),
+              trailing: Text('⌘ V'),
+              enabled: clipboardHasData,
+              onTap: () {
+                terminal.paste(clipboardData!.text!);
+                terminal.debug.onMsg('paste ┤${clipboardData.text}├');
+                Navigator.of(context).pop();
+              },
+            ),
+            MacosContextMenuItem(
+              content: Text('Select All'),
+              trailing: Text('⌘ A'),
+              onTap: () {
+                print('Select All is currently not implemented.');
+                Navigator.of(context).pop();
+              },
+            ),
+            MacosContextMenuDivider(),
+            MacosContextMenuItem(
+              content: Text('Clear'),
+              trailing: Text('⌘ K'),
+              onTap: () {
+                print('Clear is currently not implemented.');
+                Navigator.of(context).pop();
+              },
+            ),
+            MacosContextMenuDivider(),
+            MacosContextMenuItem(
+              content: Text('Kill'),
+              onTap: () {
+                backend.terminate();
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+      child: CupertinoScrollbar(
+        child: TerminalView(
+          terminal: terminal,
+          focusNode: focusNode,
+          opacity: 0.85,
+          style: TerminalStyle(
+            fontSize: 15,
           ),
         ),
       ),
+    ));
+    // pty.out.listen(terminal.write);
+
+
+    SchedulerBinding.instance?.addPostFrameCallback((timeStamp) {
+      focusNode.requestFocus();
+    });
+
+    // pty.exitCode.then((_) {
+    //   tab.requestClose();
+    // });
+    backend.exitCode.then((_) {
+      tab.requestClose();
+    });
+    return Tab(
+      controller: tab,
+      title: 'Terminal',
       onActivate: () {
         focusNode.requestFocus();
       },
       onDrop: () {
-        SchedulerBinding.instance!.addPostFrameCallback((timeStamp) {
+        SchedulerBinding.instance?.addPostFrameCallback((timeStamp) {
           focusNode.requestFocus();
         });
       },
       onClose: () {
-        pty.kill();
-
+        // pty.kill();
+        backend.terminate();
         tabCount--;
 
         if (tabCount <= 0) {
